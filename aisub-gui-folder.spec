@@ -3,6 +3,7 @@
 from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs
 
 datas = collect_data_files("faster_whisper", includes=["assets/*"])
+datas += [("assets\\app_icon.ico", "assets"), ("assets\\app_icon.png", "assets")]
 binaries = collect_dynamic_libs("ctranslate2") + collect_dynamic_libs("onnxruntime")
 hiddenimports = [
     "av",
@@ -64,6 +65,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon="assets\\app_icon.ico",
     contents_directory="data",
 )
 

@@ -52,6 +52,13 @@ Use CPU + int8 for the most portable setup. Use GPU + float16 or int8_float16 on
 Automatic NVIDIA runtime installation is not built into this app. The official installers may require an NVIDIA account, administrator approval, GPU-specific driver choices, and license acceptance, so the GUI opens the official download pages instead."""
 
 
+def resource_path(relative_path: str) -> Path:
+    """Resolve bundled assets for source and PyInstaller builds."""
+
+    base_path = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[2]))
+    return base_path / relative_path
+
+
 @dataclass
 class QueueItem:
     """One queued transcription job."""
@@ -72,6 +79,7 @@ class SubtitleCreatorGui:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
         self.root.title("AI Subtitle Creator")
+        self._set_window_icon()
         self.root.geometry("1120x760")
         self.root.minsize(980, 650)
 
@@ -102,6 +110,15 @@ class SubtitleCreatorGui:
         self._update_task_help()
         self._refresh_model_list()
         self.root.after(100, self._drain_events)
+
+    def _set_window_icon(self) -> None:
+        icon_path = resource_path("assets/app_icon.ico")
+        if not icon_path.exists():
+            return
+        try:
+            self.root.iconbitmap(default=str(icon_path))
+        except tk.TclError:
+            return
 
     def _configure_styles(self) -> None:
         style = ttk.Style()
