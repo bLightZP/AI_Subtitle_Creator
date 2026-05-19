@@ -9,7 +9,7 @@ import webbrowser
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from tkinter import BOTH, END, LEFT, RIGHT, VERTICAL, W, X, filedialog, messagebox, scrolledtext, ttk
+from tkinter import BOTH, END, LEFT, RIGHT, VERTICAL, W, X, filedialog, messagebox, ttk
 import tkinter as tk
 
 from ai_subtitle_creator.backends import BackendName, create_backend
@@ -460,7 +460,10 @@ class SubtitleCreatorGui:
         frame = ttk.LabelFrame(parent, text="GPU Setup", padding=12)
         frame.pack(fill=BOTH, expand=True, pady=(12, 0))
 
-        instructions = scrolledtext.ScrolledText(frame, height=9, wrap=tk.WORD)
+        instructions_area = ttk.Frame(frame)
+        instructions_area.pack(fill=BOTH, expand=True)
+
+        instructions = tk.Text(instructions_area, height=9, wrap=tk.WORD)
         instructions.insert("1.0", CUDA_INSTALL_TEXT)
         instructions.configure(
             state=tk.DISABLED,
@@ -473,19 +476,11 @@ class SubtitleCreatorGui:
             relief=tk.FLAT,
             selectbackground=COLOR_SELECT,
             selectforeground=COLOR_TEXT,
+            yscrollcommand=lambda *args: instructions_scroll.set(*args),
         )
-        if hasattr(instructions, "vbar"):
-            instructions.vbar.configure(
-                activebackground=COLOR_CONTROL_ACTIVE,
-                background=COLOR_CONTROL,
-                borderwidth=0,
-                elementborderwidth=0,
-                highlightbackground=COLOR_BG,
-                highlightcolor=COLOR_BG,
-                relief=tk.FLAT,
-                troughcolor=COLOR_ENTRY,
-            )
-        instructions.pack(fill=BOTH, expand=True)
+        instructions_scroll = ttk.Scrollbar(instructions_area, orient=VERTICAL, command=instructions.yview)
+        instructions.pack(fill=BOTH, expand=True, side=LEFT)
+        instructions_scroll.pack(fill=tk.Y, side=RIGHT)
 
         buttons = ttk.Frame(frame)
         buttons.pack(fill=X, pady=(8, 0))
