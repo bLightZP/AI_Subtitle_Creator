@@ -479,8 +479,8 @@ class SubtitleCreatorGui:
             yscrollcommand=lambda *args: instructions_scroll.set(*args),
         )
         instructions_scroll = ttk.Scrollbar(instructions_area, orient=VERTICAL, command=instructions.yview)
-        instructions.pack(fill=BOTH, expand=True, side=LEFT)
         instructions_scroll.pack(fill=tk.Y, side=RIGHT)
+        instructions.pack(fill=BOTH, expand=True, side=LEFT)
 
         buttons = ttk.Frame(frame)
         buttons.pack(fill=X, pady=(8, 0))
