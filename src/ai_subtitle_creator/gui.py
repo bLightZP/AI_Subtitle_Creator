@@ -6,6 +6,7 @@ import queue
 import threading
 import traceback
 import webbrowser
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from tkinter import BOTH, END, LEFT, RIGHT, VERTICAL, W, X, filedialog, messagebox, scrolledtext, ttk
@@ -29,15 +30,18 @@ MEDIA_PATTERNS = (
     ("MKV files", "*.mkv"),
     ("All files", "*.*"),
 )
-COLOR_BG = "#111318"
-COLOR_PANEL = "#191c22"
-COLOR_PANEL_ALT = "#20242c"
-COLOR_BORDER = "#343a46"
-COLOR_TEXT = "#e6e8ee"
-COLOR_MUTED = "#a9afbd"
-COLOR_ACCENT = "#6ea8fe"
-COLOR_ACCENT_ACTIVE = "#8bb9ff"
-COLOR_ENTRY = "#0f1116"
+COLOR_BG = "#101216"
+COLOR_PANEL = "#151922"
+COLOR_PANEL_ALT = "#1c2230"
+COLOR_CONTROL = "#171b24"
+COLOR_CONTROL_ACTIVE = "#242b3a"
+COLOR_BORDER = "#2b3342"
+COLOR_BORDER_SOFT = "#202632"
+COLOR_TEXT = "#e7eaf0"
+COLOR_MUTED = "#a8b0bf"
+COLOR_ACCENT = "#5d9cec"
+COLOR_ACCENT_ACTIVE = "#77b2ff"
+COLOR_ENTRY = "#0c0f14"
 COLOR_SELECT = "#263d63"
 CUDA_INSTALL_TEXT = """GPU mode uses faster-whisper through CTranslate2.
 
@@ -104,8 +108,14 @@ class SubtitleCreatorGui:
         if "clam" in style.theme_names():
             style.theme_use("clam")
         self.root.configure(bg=COLOR_BG)
+        self._enable_dark_title_bar()
         self.root.option_add("*Background", COLOR_BG)
         self.root.option_add("*Foreground", COLOR_TEXT)
+        self.root.option_add("*activeBackground", COLOR_CONTROL_ACTIVE)
+        self.root.option_add("*activeForeground", COLOR_TEXT)
+        self.root.option_add("*insertBackground", COLOR_TEXT)
+        self.root.option_add("*selectBackground", COLOR_SELECT)
+        self.root.option_add("*selectForeground", COLOR_TEXT)
         self.root.option_add("*Entry.Background", COLOR_ENTRY)
         self.root.option_add("*Entry.Foreground", COLOR_TEXT)
         self.root.option_add("*Listbox.Background", COLOR_ENTRY)
@@ -118,19 +128,39 @@ class SubtitleCreatorGui:
         self.root.option_add("*TCombobox*Listbox.selectForeground", COLOR_TEXT)
 
         style.configure(".", background=COLOR_BG, foreground=COLOR_TEXT, font=("Segoe UI", 9))
-        style.configure("TFrame", background=COLOR_BG)
+        style.configure("TFrame", background=COLOR_BG, borderwidth=0)
         style.configure("Panel.TFrame", background=COLOR_PANEL)
         style.configure("TLabel", background=COLOR_BG, foreground=COLOR_TEXT, padding=(0, 2))
         style.configure("Muted.TLabel", background=COLOR_BG, foreground=COLOR_MUTED)
         style.configure("Header.TLabel", background=COLOR_BG, foreground=COLOR_TEXT, font=("Segoe UI", 14, "bold"))
         style.configure("Subheader.TLabel", background=COLOR_BG, foreground=COLOR_TEXT, font=("Segoe UI", 10, "bold"))
-        style.configure("TLabelframe", background=COLOR_BG, bordercolor=COLOR_BORDER, relief="solid")
+        style.configure(
+            "TLabelframe",
+            background=COLOR_BG,
+            bordercolor=COLOR_BORDER,
+            borderwidth=1,
+            darkcolor=COLOR_BORDER,
+            lightcolor=COLOR_BORDER,
+            relief="solid",
+        )
         style.configure("TLabelframe.Label", background=COLOR_BG, foreground=COLOR_TEXT)
 
-        style.configure("TButton", background=COLOR_PANEL_ALT, foreground=COLOR_TEXT, bordercolor=COLOR_BORDER, padding=(10, 6))
+        style.configure(
+            "TButton",
+            background=COLOR_CONTROL,
+            foreground=COLOR_TEXT,
+            bordercolor=COLOR_BORDER,
+            borderwidth=1,
+            darkcolor=COLOR_BORDER,
+            focuscolor=COLOR_BORDER_SOFT,
+            lightcolor=COLOR_BORDER,
+            padding=(10, 6),
+            relief="flat",
+        )
         style.map(
             "TButton",
-            background=[("active", COLOR_BORDER), ("pressed", COLOR_SELECT), ("disabled", COLOR_PANEL)],
+            background=[("active", COLOR_CONTROL_ACTIVE), ("pressed", COLOR_SELECT), ("disabled", COLOR_PANEL)],
+            bordercolor=[("active", COLOR_ACCENT), ("pressed", COLOR_ACCENT), ("disabled", COLOR_BORDER_SOFT)],
             foreground=[("disabled", COLOR_MUTED)],
         )
         style.configure(
@@ -138,14 +168,52 @@ class SubtitleCreatorGui:
             background=COLOR_ACCENT,
             foreground="#08111f",
             bordercolor=COLOR_ACCENT,
+            darkcolor=COLOR_ACCENT,
+            lightcolor=COLOR_ACCENT,
+            focuscolor=COLOR_ACCENT,
             padding=(14, 7),
+            relief="flat",
         )
-        style.map("Accent.TButton", background=[("active", COLOR_ACCENT_ACTIVE), ("pressed", COLOR_ACCENT)])
+        style.map(
+            "Accent.TButton",
+            background=[("active", COLOR_ACCENT_ACTIVE), ("pressed", COLOR_ACCENT), ("disabled", COLOR_PANEL)],
+            bordercolor=[("active", COLOR_ACCENT_ACTIVE), ("pressed", COLOR_ACCENT), ("disabled", COLOR_BORDER_SOFT)],
+            foreground=[("disabled", COLOR_MUTED)],
+        )
 
-        style.configure("TEntry", fieldbackground=COLOR_ENTRY, foreground=COLOR_TEXT, insertcolor=COLOR_TEXT, bordercolor=COLOR_BORDER)
-        style.configure("TCombobox", fieldbackground=COLOR_ENTRY, background=COLOR_PANEL_ALT, foreground=COLOR_TEXT, arrowcolor=COLOR_TEXT)
+        style.configure(
+            "TEntry",
+            fieldbackground=COLOR_ENTRY,
+            foreground=COLOR_TEXT,
+            insertcolor=COLOR_TEXT,
+            bordercolor=COLOR_BORDER,
+            borderwidth=1,
+            darkcolor=COLOR_BORDER,
+            lightcolor=COLOR_BORDER,
+            relief="flat",
+            selectbackground=COLOR_SELECT,
+            selectforeground=COLOR_TEXT,
+        )
+        style.map("TEntry", bordercolor=[("focus", COLOR_ACCENT), ("disabled", COLOR_BORDER_SOFT)])
+        style.configure(
+            "TCombobox",
+            arrowcolor=COLOR_TEXT,
+            arrowsize=12,
+            background=COLOR_CONTROL,
+            bordercolor=COLOR_BORDER,
+            borderwidth=1,
+            darkcolor=COLOR_BORDER,
+            fieldbackground=COLOR_ENTRY,
+            foreground=COLOR_TEXT,
+            lightcolor=COLOR_BORDER,
+            relief="flat",
+            selectbackground=COLOR_ENTRY,
+            selectforeground=COLOR_TEXT,
+        )
         style.map(
             "TCombobox",
+            background=[("active", COLOR_CONTROL_ACTIVE), ("pressed", COLOR_CONTROL_ACTIVE), ("disabled", COLOR_PANEL)],
+            bordercolor=[("focus", COLOR_ACCENT), ("active", COLOR_ACCENT), ("disabled", COLOR_BORDER_SOFT)],
             fieldbackground=[("readonly", COLOR_ENTRY)],
             foreground=[("readonly", COLOR_TEXT)],
             selectbackground=[("readonly", COLOR_ENTRY)],
@@ -158,12 +226,69 @@ class SubtitleCreatorGui:
             fieldbackground=COLOR_ENTRY,
             foreground=COLOR_TEXT,
             bordercolor=COLOR_BORDER,
+            borderwidth=1,
+            darkcolor=COLOR_BORDER,
+            lightcolor=COLOR_BORDER,
+            relief="flat",
         )
-        style.configure("Treeview.Heading", background=COLOR_PANEL_ALT, foreground=COLOR_TEXT, bordercolor=COLOR_BORDER)
+        style.configure(
+            "Treeview.Heading",
+            background=COLOR_PANEL_ALT,
+            bordercolor=COLOR_BORDER,
+            borderwidth=1,
+            darkcolor=COLOR_BORDER,
+            foreground=COLOR_TEXT,
+            lightcolor=COLOR_BORDER,
+            relief="flat",
+        )
+        style.map("Treeview.Heading", background=[("active", COLOR_CONTROL_ACTIVE)])
         style.map("Treeview", background=[("selected", COLOR_SELECT)], foreground=[("selected", COLOR_TEXT)])
-        style.configure("TProgressbar", background=COLOR_ACCENT, troughcolor=COLOR_ENTRY, bordercolor=COLOR_BORDER, lightcolor=COLOR_ACCENT, darkcolor=COLOR_ACCENT)
+        style.configure(
+            "TProgressbar",
+            background=COLOR_ACCENT,
+            bordercolor=COLOR_BORDER_SOFT,
+            darkcolor=COLOR_ACCENT,
+            lightcolor=COLOR_ACCENT,
+            troughcolor=COLOR_ENTRY,
+            thickness=14,
+        )
         style.configure("TPanedwindow", background=COLOR_BG)
-        style.configure("Vertical.TScrollbar", background=COLOR_PANEL_ALT, troughcolor=COLOR_BG, bordercolor=COLOR_BORDER, arrowcolor=COLOR_TEXT)
+        style.configure(
+            "Vertical.TScrollbar",
+            arrowcolor=COLOR_MUTED,
+            background=COLOR_CONTROL,
+            bordercolor=COLOR_BG,
+            borderwidth=0,
+            darkcolor=COLOR_CONTROL,
+            lightcolor=COLOR_CONTROL,
+            relief="flat",
+            troughcolor=COLOR_ENTRY,
+        )
+        style.map(
+            "Vertical.TScrollbar",
+            arrowcolor=[("active", COLOR_TEXT)],
+            background=[("active", COLOR_CONTROL_ACTIVE), ("pressed", COLOR_SELECT)],
+        )
+
+    def _enable_dark_title_bar(self) -> None:
+        if sys.platform != "win32":
+            return
+        try:
+            import ctypes
+
+            hwnd = ctypes.windll.user32.GetParent(self.root.winfo_id())
+            value = ctypes.c_int(1)
+            for attribute in (20, 19):
+                result = ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                    hwnd,
+                    attribute,
+                    ctypes.byref(value),
+                    ctypes.sizeof(value),
+                )
+                if result == 0:
+                    break
+        except Exception:
+            return
 
     def _build_layout(self) -> None:
         root_frame = ttk.Frame(self.root, padding=16)
@@ -310,13 +435,13 @@ class SubtitleCreatorGui:
         self.model_list = tk.Listbox(model_area, height=8, exportselection=False)
         self.model_list.configure(
             background=COLOR_ENTRY,
+            borderwidth=1,
             foreground=COLOR_TEXT,
-            selectbackground=COLOR_SELECT,
-            selectforeground=COLOR_TEXT,
             highlightbackground=COLOR_BORDER,
             highlightcolor=COLOR_ACCENT,
             relief=tk.FLAT,
-            borderwidth=1,
+            selectbackground=COLOR_SELECT,
+            selectforeground=COLOR_TEXT,
         )
         self.model_list.pack(fill=BOTH, expand=True, side=LEFT)
         self.model_list.bind("<<ListboxSelect>>", self._on_model_list_selected)
@@ -340,15 +465,26 @@ class SubtitleCreatorGui:
         instructions.configure(
             state=tk.DISABLED,
             background=COLOR_ENTRY,
+            borderwidth=1,
             foreground=COLOR_TEXT,
-            insertbackground=COLOR_TEXT,
-            selectbackground=COLOR_SELECT,
-            selectforeground=COLOR_TEXT,
             highlightbackground=COLOR_BORDER,
             highlightcolor=COLOR_ACCENT,
+            insertbackground=COLOR_TEXT,
             relief=tk.FLAT,
-            borderwidth=1,
+            selectbackground=COLOR_SELECT,
+            selectforeground=COLOR_TEXT,
         )
+        if hasattr(instructions, "vbar"):
+            instructions.vbar.configure(
+                activebackground=COLOR_CONTROL_ACTIVE,
+                background=COLOR_CONTROL,
+                borderwidth=0,
+                elementborderwidth=0,
+                highlightbackground=COLOR_BG,
+                highlightcolor=COLOR_BG,
+                relief=tk.FLAT,
+                troughcolor=COLOR_ENTRY,
+            )
         instructions.pack(fill=BOTH, expand=True)
 
         buttons = ttk.Frame(frame)
