@@ -10,7 +10,8 @@ from ai_subtitle_creator.process_priority import ProcessPriority, priority_from_
 def test_priority_labels_round_trip() -> None:
     labels = priority_labels()
 
-    assert labels == ("Low", "Below normal", "Normal", "Above normal", "High")
+    assert labels == ("Idle", "Below normal", "Normal", "Above normal", "High")
+    assert priority_from_label("Idle") == ProcessPriority.IDLE
     assert priority_from_label("Below normal") == ProcessPriority.BELOW_NORMAL
     assert priority_from_label("High") == ProcessPriority.HIGH
 

@@ -45,10 +45,10 @@ aisub .\movie.mp4 --device cpu --compute-type int8
 Reduce CPU impact while transcribing:
 
 ```powershell
-aisub .\movie.mp4 --process-priority below-normal --cpu-threads 2
+aisub .\movie.mp4 --process-priority idle --cpu-threads 2
 ```
 
-The GUI exposes the same controls as `CPU priority` and `CPU threads`. `CPU priority` adjusts the current app process priority, which affects its native inference worker threads. `CPU threads` limits faster-whisper CPU worker threads; use `0` to let the backend choose.
+The GUI exposes the same controls as `CPU priority` and `CPU threads`. `CPU priority` adjusts the current app process priority, which affects its native inference worker threads. `Idle` is the lowest-impact option. `CPU threads` limits faster-whisper CPU worker threads; use `0` to let the backend choose automatically.
 
 Limit how long a single cue stays on screen:
 

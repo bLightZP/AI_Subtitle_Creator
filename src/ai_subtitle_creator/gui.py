@@ -394,46 +394,7 @@ class SubtitleCreatorGui:
         frame = ttk.LabelFrame(parent, text="Transcription Settings", padding=12)
         frame.pack(fill=X)
 
-        ttk.Label(frame, text="Default model").grid(row=0, column=0, sticky=W)
-        ttk.Combobox(frame, textvariable=self.default_model_var, values=self.model_names, state="readonly", width=22).grid(
-            row=0,
-            column=1,
-            sticky=W,
-            padx=(8, 0),
-        )
-
-        ttk.Label(frame, text="Device").grid(row=1, column=0, sticky=W, pady=(8, 0))
-        device_box = ttk.Combobox(
-            frame,
-            textvariable=self.device_var,
-            values=("cpu", "cuda", "auto"),
-            state="readonly",
-            width=22,
-        )
-        device_box.grid(row=1, column=1, sticky=W, padx=(8, 0), pady=(8, 0))
-        device_box.bind("<<ComboboxSelected>>", self._on_device_changed)
-
-        ttk.Label(frame, text="Compute type").grid(row=2, column=0, sticky=W, pady=(8, 0))
-        ttk.Combobox(
-            frame,
-            textvariable=self.compute_type_var,
-            values=("int8", "float16", "int8_float16", "float32", "default"),
-            state="readonly",
-            width=22,
-        ).grid(row=2, column=1, sticky=W, padx=(8, 0), pady=(8, 0))
-
-        ttk.Label(frame, text="Task").grid(row=3, column=0, sticky=W, pady=(8, 0))
-        task_box = ttk.Combobox(
-            frame,
-            textvariable=self.task_var,
-            values=(TaskName.TRANSCRIBE.value, TaskName.TRANSLATE.value),
-            state="readonly",
-            width=22,
-        )
-        task_box.grid(row=3, column=1, sticky=W, padx=(8, 0), pady=(8, 0))
-        task_box.bind("<<ComboboxSelected>>", self._on_task_changed)
-
-        ttk.Label(frame, text="CPU priority").grid(row=4, column=0, sticky=W, pady=(8, 0))
+        ttk.Label(frame, text="CPU priority").grid(row=0, column=0, sticky=W)
         priority_box = ttk.Combobox(
             frame,
             textvariable=self.priority_var,
@@ -441,26 +402,72 @@ class SubtitleCreatorGui:
             state="readonly",
             width=22,
         )
-        priority_box.grid(row=4, column=1, sticky=W, padx=(8, 0), pady=(8, 0))
+        priority_box.grid(row=0, column=1, sticky=W, padx=(8, 0))
         priority_box.bind("<<ComboboxSelected>>", self._on_priority_changed)
 
-        ttk.Label(frame, text="CPU threads").grid(row=5, column=0, sticky=W, pady=(8, 0))
-        ttk.Entry(frame, textvariable=self.cpu_threads_var, width=25).grid(row=5, column=1, sticky=W, padx=(8, 0), pady=(8, 0))
+        ttk.Label(frame, text="CPU threads").grid(row=1, column=0, sticky=W, pady=(8, 0))
+        ttk.Entry(frame, textvariable=self.cpu_threads_var, width=25).grid(row=1, column=1, sticky=W, padx=(8, 0), pady=(8, 0))
+        ttk.Label(
+            frame,
+            text="0 = automatic backend choice. Use 1, 2, 4, etc. to cap CPU worker threads.",
+            style="Muted.TLabel",
+            wraplength=410,
+        ).grid(row=2, column=0, columnspan=3, sticky=W, pady=(4, 0))
 
-        ttk.Label(frame, text="Language (source)").grid(row=6, column=0, sticky=W, pady=(8, 0))
-        ttk.Entry(frame, textvariable=self.language_var, width=25).grid(row=6, column=1, sticky=W, padx=(8, 0), pady=(8, 0))
+        ttk.Label(frame, text="Default model").grid(row=3, column=0, sticky=W, pady=(8, 0))
+        ttk.Combobox(frame, textvariable=self.default_model_var, values=self.model_names, state="readonly", width=22).grid(
+            row=3,
+            column=1,
+            sticky=W,
+            padx=(8, 0),
+            pady=(8, 0),
+        )
+
+        ttk.Label(frame, text="Device").grid(row=4, column=0, sticky=W, pady=(8, 0))
+        device_box = ttk.Combobox(
+            frame,
+            textvariable=self.device_var,
+            values=("cpu", "cuda", "auto"),
+            state="readonly",
+            width=22,
+        )
+        device_box.grid(row=4, column=1, sticky=W, padx=(8, 0), pady=(8, 0))
+        device_box.bind("<<ComboboxSelected>>", self._on_device_changed)
+
+        ttk.Label(frame, text="Compute type").grid(row=5, column=0, sticky=W, pady=(8, 0))
+        ttk.Combobox(
+            frame,
+            textvariable=self.compute_type_var,
+            values=("int8", "float16", "int8_float16", "float32", "default"),
+            state="readonly",
+            width=22,
+        ).grid(row=5, column=1, sticky=W, padx=(8, 0), pady=(8, 0))
+
+        ttk.Label(frame, text="Task").grid(row=6, column=0, sticky=W, pady=(8, 0))
+        task_box = ttk.Combobox(
+            frame,
+            textvariable=self.task_var,
+            values=(TaskName.TRANSCRIBE.value, TaskName.TRANSLATE.value),
+            state="readonly",
+            width=22,
+        )
+        task_box.grid(row=6, column=1, sticky=W, padx=(8, 0), pady=(8, 0))
+        task_box.bind("<<ComboboxSelected>>", self._on_task_changed)
+
+        ttk.Label(frame, text="Language (source)").grid(row=7, column=0, sticky=W, pady=(8, 0))
+        ttk.Entry(frame, textvariable=self.language_var, width=25).grid(row=7, column=1, sticky=W, padx=(8, 0), pady=(8, 0))
 
         ttk.Label(frame, textvariable=self.task_help_var, wraplength=410).grid(
-            row=7,
+            row=8,
             column=0,
             columnspan=3,
             sticky=W,
             pady=(8, 0),
         )
 
-        ttk.Label(frame, text="Model cache").grid(row=8, column=0, sticky=W, pady=(8, 0))
-        ttk.Entry(frame, textvariable=self.model_cache_var, width=34).grid(row=8, column=1, sticky=W, padx=(8, 0), pady=(8, 0))
-        ttk.Button(frame, text="Browse", command=self._browse_model_cache).grid(row=8, column=2, sticky=W, padx=(8, 0), pady=(8, 0))
+        ttk.Label(frame, text="Model cache").grid(row=9, column=0, sticky=W, pady=(8, 0))
+        ttk.Entry(frame, textvariable=self.model_cache_var, width=34).grid(row=9, column=1, sticky=W, padx=(8, 0), pady=(8, 0))
+        ttk.Button(frame, text="Browse", command=self._browse_model_cache).grid(row=9, column=2, sticky=W, padx=(8, 0), pady=(8, 0))
 
     def _build_models_panel(self, parent: ttk.Frame) -> None:
         frame = ttk.LabelFrame(parent, text="Model Downloads", padding=12)

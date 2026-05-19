@@ -11,7 +11,7 @@ from enum import Enum
 class ProcessPriority(str, Enum):
     """Supported process priority levels."""
 
-    LOW = "low"
+    IDLE = "idle"
     BELOW_NORMAL = "below-normal"
     NORMAL = "normal"
     ABOVE_NORMAL = "above-normal"
@@ -19,7 +19,7 @@ class ProcessPriority(str, Enum):
 
 
 PRIORITY_LABELS: dict[ProcessPriority, str] = {
-    ProcessPriority.LOW: "Low",
+    ProcessPriority.IDLE: "Idle",
     ProcessPriority.BELOW_NORMAL: "Below normal",
     ProcessPriority.NORMAL: "Normal",
     ProcessPriority.ABOVE_NORMAL: "Above normal",
@@ -50,7 +50,7 @@ def apply_process_priority(priority: ProcessPriority) -> None:
 
 def _apply_windows_priority(priority: ProcessPriority) -> None:
     priority_classes = {
-        ProcessPriority.LOW: 0x00000040,
+        ProcessPriority.IDLE: 0x00000040,
         ProcessPriority.BELOW_NORMAL: 0x00004000,
         ProcessPriority.NORMAL: 0x00000020,
         ProcessPriority.ABOVE_NORMAL: 0x00008000,
@@ -66,7 +66,8 @@ def _apply_windows_priority(priority: ProcessPriority) -> None:
 def _apply_posix_priority(priority: ProcessPriority) -> None:
     if priority == ProcessPriority.NORMAL:
         return
-    if priority in {ProcessPriority.LOW, ProcessPriority.BELOW_NORMAL}:
-        os.nice(10 if priority == ProcessPriority.LOW else 5)
+    if priority in {ProcessPriority.IDLE, ProcessPriority.BELOW_NORMAL}:
+        nice_value = 15 if priority == ProcessPriority.IDLE else 5
+        os.nice(nice_value)
         return
     raise RuntimeError("Raising process priority is only supported on Windows.")
