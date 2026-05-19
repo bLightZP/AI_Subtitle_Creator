@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import sys
 import shutil
+import sys
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 MODEL_DESCRIPTIONS = {
@@ -45,6 +46,15 @@ DEFAULT_MODELS = [
 ]
 IMPORTED_MODELS_DIR = "imported"
 MODEL_FOLDER_MARKERS = {"config.json", "model.bin", "tokenizer.json", "vocabulary.json"}
+MODEL_ALLOW_PATTERNS = [
+    "config.json",
+    "preprocessor_config.json",
+    "model.bin",
+    "tokenizer.json",
+    "vocabulary.*",
+]
+
+DownloadProgressCallback = Callable[[int, int], None]
 
 
 def default_model_cache() -> Path:
@@ -83,6 +93,14 @@ def imported_model_names(cache_dir: Path) -> list[str]:
     return [f"local:{path.name}" for path in sorted(imported_root.iterdir()) if path.is_dir()]
 
 
+def local_model_names(cache_dir: Path, downloadable_names: Sequence[str] | None = None) -> list[str]:
+    """Return locally usable model selectors for the configured cache."""
+
+    names = list(downloadable_names or available_model_names())
+    downloaded = [name for name in names if is_model_downloaded(name, cache_dir)]
+    return [*downloaded, *imported_model_names(cache_dir)]
+
+
 def resolve_model_reference(model_name: str, cache_dir: Path | None) -> str:
     """Resolve a model selector value to a backend model name or path."""
 
@@ -114,12 +132,68 @@ def is_model_downloaded(model_name: str, cache_dir: Path) -> bool:
     return True
 
 
-def download_model_to_cache(model_name: str, cache_dir: Path) -> Path:
+def download_model_to_cache(
+    model_name: str,
+    cache_dir: Path,
+    progress_callback: DownloadProgressCallback | None = None,
+) -> Path:
     """Download a faster-whisper model into the cache and return its local path."""
-    from faster_whisper import download_model
-
     cache_dir.mkdir(parents=True, exist_ok=True)
-    return Path(download_model(model_name, cache_dir=str(cache_dir)))
+    if progress_callback is None:
+        from faster_whisper import download_model
+
+        return Path(download_model(model_name, cache_dir=str(cache_dir)))
+
+    from faster_whisper.utils import _MODELS
+    from huggingface_hub import snapshot_download
+    from tqdm.auto import tqdm
+
+    if "/" in model_name:
+        repo_id = model_name
+    else:
+        repo_id = _MODELS.get(model_name)
+        if repo_id is None:
+            raise ValueError(f"Invalid model size '{model_name}'")
+
+    class DownloadProgressBar(tqdm):
+        def __init__(self, *args, **kwargs):
+            self._report_progress = kwargs.get("unit") == "B"
+            self._last_report = (-1, -1)
+            super().__init__(*args, **kwargs)
+            self._notify()
+
+        def update(self, n: int | float = 1):  # type: ignore[override]
+            result = super().update(n)
+            self._notify()
+            return result
+
+        def refresh(self, *args, **kwargs):  # type: ignore[override]
+            result = super().refresh(*args, **kwargs)
+            self._notify()
+            return result
+
+        def close(self) -> None:  # type: ignore[override]
+            self._notify(force=True)
+            super().close()
+
+        def _notify(self, *, force: bool = False) -> None:
+            if not self._report_progress:
+                return
+            completed = int(self.n or 0)
+            total = int(self.total or 0)
+            snapshot = (completed, total)
+            if force or snapshot != self._last_report:
+                self._last_report = snapshot
+                progress_callback(completed, total)
+
+    return Path(
+        snapshot_download(
+            repo_id,
+            cache_dir=str(cache_dir),
+            allow_patterns=MODEL_ALLOW_PATTERNS,
+            tqdm_class=DownloadProgressBar,
+        )
+    )
 
 
 def import_model_to_cache(source_file: Path, cache_dir: Path) -> Path:

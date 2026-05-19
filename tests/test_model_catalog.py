@@ -1,6 +1,7 @@
 from ai_subtitle_creator.model_catalog import (
     import_model_to_cache,
     imported_model_names,
+    local_model_names,
     resolve_model_reference,
     available_model_names,
     describe_model,
@@ -43,4 +44,19 @@ def test_import_model_marker_file_copies_parent_folder(tmp_path) -> None:
     assert imported == tmp_path / "cache" / "imported" / "ct2-model"
     assert (imported / "model.bin").read_bytes() == b"weights"
     assert (imported / "config.json").read_text(encoding="utf-8") == "{}"
+
+
+def test_local_model_names_returns_downloaded_and_imported(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(
+        "ai_subtitle_creator.model_catalog.is_model_downloaded",
+        lambda model_name, _cache_dir: model_name in {"small", "medium"},
+    )
+    monkeypatch.setattr(
+        "ai_subtitle_creator.model_catalog.imported_model_names",
+        lambda _cache_dir: ["local:custom"],
+    )
+
+    names = local_model_names(tmp_path, ["tiny", "small", "medium"])
+
+    assert names == ["small", "medium", "local:custom"]
 

@@ -19,13 +19,14 @@ from ai_subtitle_creator.model_catalog import (
     default_model_cache,
     describe_model,
     download_model_to_cache,
-    imported_model_names,
     import_model_to_cache,
     is_model_downloaded,
+    local_model_names,
     resolve_model_reference,
 )
 from ai_subtitle_creator.models import TaskName, TranscriptionOptions
 from ai_subtitle_creator.process_priority import apply_process_priority, priority_from_label, priority_labels
+from ai_subtitle_creator.settings_store import GuiSettings, default_settings_path, load_gui_settings, save_gui_settings
 from ai_subtitle_creator.subtitles import SrtOptions, write_srt
 
 MEDIA_PATTERNS = (
@@ -47,6 +48,9 @@ COLOR_ACCENT = "#5d9cec"
 COLOR_ACCENT_ACTIVE = "#77b2ff"
 COLOR_ENTRY = "#0c0f14"
 COLOR_SELECT = "#263d63"
+DEFAULT_WINDOW_GEOMETRY = "1120x700"
+NO_MODEL_LABEL = "No model downloaded"
+SETTINGS_SAVE_DELAY_MS = 250
 CUDA_INSTALL_TEXT = """GPU mode uses faster-whisper through CTranslate2.
 
 Current faster-whisper/CTranslate2 GPU builds require NVIDIA CUDA 12.x and cuDNN 9.x runtime libraries. Install an up-to-date NVIDIA driver first, then install CUDA Toolkit 12.x and cuDNN 9.x for Windows. Restart the machine after changing PATH or installing NVIDIA runtime components.
@@ -83,51 +87,100 @@ class SubtitleCreatorGui:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
         self.root.title("AI Subtitle Creator")
-        self._set_window_icon()
-        self.root.geometry("1120x760")
-        self.root.minsize(980, 650)
+        self._set_window_icon(self.root)
+        self.settings_path = default_settings_path()
+        self.saved_settings = load_gui_settings(self.settings_path)
+        self.root.geometry(self.saved_settings.window_geometry or DEFAULT_WINDOW_GEOMETRY)
+        self.root.minsize(980, 620)
 
         self.download_model_names = available_model_names()
-        self.model_names = [*self.download_model_names]
+        initial_model_cache = self.saved_settings.model_cache or str(default_model_cache())
+        self.local_models = local_model_names(Path(initial_model_cache), self.download_model_names)
+        self.model_names = self.local_models or [NO_MODEL_LABEL]
         self.items: dict[str, QueueItem] = {}
         self.events: queue.Queue[tuple[str, object]] = queue.Queue()
         self.worker: threading.Thread | None = None
         self.stop_requested = False
         self.active_item_id: str | None = None
         self.active_cpu_threads = 0
+        self.active_model_cache_dir = Path(initial_model_cache)
         self.completed_count = 0
         self.current_fraction = 0.0
+        self.settings_save_job: str | None = None
+        self.settings_ready = False
+        self.download_in_progress = False
+        self.download_window: tk.Toplevel | None = None
+        self.model_list: tk.Listbox | None = None
+        self.download_button: ttk.Button | None = None
+        self.import_button: ttk.Button | None = None
+        self.download_progress: ttk.Progressbar | None = None
+        self.add_files_button: ttk.Button | None = None
+        self.remove_button: ttk.Button | None = None
+        self.clear_button: ttk.Button | None = None
+        self.apply_model_button: ttk.Button | None = None
+        self.download_models_button: ttk.Button | None = None
+        self.model_cache_entry: ttk.Entry | None = None
 
-        self.default_model_var = tk.StringVar(value="small" if "small" in self.model_names else self.model_names[0])
-        self.selected_model_var = tk.StringVar(value=self.default_model_var.get())
-        self.device_var = tk.StringVar(value="cpu")
-        self.compute_type_var = tk.StringVar(value="int8")
-        self.language_var = tk.StringVar(value="")
-        self.task_var = tk.StringVar(value=TaskName.TRANSCRIBE.value)
-        self.priority_var = tk.StringVar(value="Below normal")
-        self.cpu_threads_var = tk.StringVar(value="0")
-        self.model_cache_var = tk.StringVar(value=str(default_model_cache()))
+        task_values = (TaskName.TRANSCRIBE.value, TaskName.TRANSLATE.value)
+        device_values = ("cpu", "cuda", "auto")
+        compute_values = ("int8", "float16", "int8_float16", "float32", "default")
+        priority_values = priority_labels()
+
+        self.default_model_var = tk.StringVar(value=self._initial_model_value(self.saved_settings.default_model))
+        self.selected_model_var = tk.StringVar(value=self._initial_model_value(self.saved_settings.selected_model))
+        self.device_var = tk.StringVar(value=self._normalize_choice(self.saved_settings.device, device_values, "cpu"))
+        self.compute_type_var = tk.StringVar(
+            value=self._normalize_choice(self.saved_settings.compute_type, compute_values, "int8")
+        )
+        self.language_var = tk.StringVar(value=self.saved_settings.language)
+        self.task_var = tk.StringVar(
+            value=self._normalize_choice(self.saved_settings.task, task_values, TaskName.TRANSCRIBE.value)
+        )
+        self.priority_var = tk.StringVar(
+            value=self._normalize_choice(self.saved_settings.priority, priority_values, "Below normal")
+        )
+        self.cpu_threads_var = tk.StringVar(value=self.saved_settings.cpu_threads or "0")
+        self.model_cache_var = tk.StringVar(value=initial_model_cache)
         self.status_var = tk.StringVar(value="Ready")
         self.current_label_var = tk.StringVar(value="Current file: idle")
         self.queue_label_var = tk.StringVar(value="Queue: 0 files")
         self.download_status_var = tk.StringVar(value="Select a model to download.")
+        self.download_percent_var = tk.StringVar(value="")
+        self.download_progress_var = tk.DoubleVar(value=0.0)
         self.task_help_var = tk.StringVar()
 
         self._configure_styles()
         self._build_layout()
+        self._register_setting_traces()
+        self.root.bind("<Configure>", self._on_root_configure)
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self._apply_selected_priority(show_errors=False)
         self._update_task_help()
-        self._refresh_model_list()
+        self._refresh_model_sources()
+        self.settings_ready = True
+        self._save_settings()
         self.root.after(100, self._drain_events)
 
-    def _set_window_icon(self) -> None:
+    def _set_window_icon(self, window: tk.Tk | tk.Toplevel) -> None:
         icon_path = resource_path("assets/app_icon.ico")
         if not icon_path.exists():
             return
         try:
-            self.root.iconbitmap(default=str(icon_path))
+            window.iconbitmap(default=str(icon_path))
         except tk.TclError:
             return
+
+    def _normalize_choice(self, value: str | None, allowed: tuple[str, ...], fallback: str) -> str:
+        if value in allowed:
+            return value
+        return fallback
+
+    def _initial_model_value(self, value: str | None) -> str:
+        if value in self.local_models:
+            return value
+        if self.local_models:
+            return self.local_models[0]
+        return NO_MODEL_LABEL
 
     def _configure_styles(self) -> None:
         style = ttk.Style()
@@ -335,15 +388,17 @@ class SubtitleCreatorGui:
 
         self._build_queue_panel(left)
         self._build_settings_panel(right)
-        self._build_models_panel(right)
         self._build_gpu_panel(right)
 
     def _build_queue_panel(self, parent: ttk.Frame) -> None:
         controls = ttk.Frame(parent)
         controls.pack(fill=X)
-        ttk.Button(controls, text="Add media files", command=self._add_files).pack(side=LEFT)
-        ttk.Button(controls, text="Remove selected", command=self._remove_selected).pack(side=LEFT, padx=(8, 0))
-        ttk.Button(controls, text="Clear queue", command=self._clear_queue).pack(side=LEFT, padx=(8, 0))
+        self.add_files_button = ttk.Button(controls, text="Add media files", command=self._add_files)
+        self.add_files_button.pack(side=LEFT)
+        self.remove_button = ttk.Button(controls, text="Remove selected", command=self._remove_selected)
+        self.remove_button.pack(side=LEFT, padx=(8, 0))
+        self.clear_button = ttk.Button(controls, text="Clear queue", command=self._clear_queue)
+        self.clear_button.pack(side=LEFT, padx=(8, 0))
 
         columns = ("file", "model", "status", "output")
         table = ttk.Frame(parent)
@@ -376,7 +431,8 @@ class SubtitleCreatorGui:
             width=22,
         )
         self.selected_model_combo.pack(side=LEFT, padx=(8, 8))
-        ttk.Button(model_row, text="Apply", command=self._apply_model_to_selected).pack(side=LEFT)
+        self.apply_model_button = ttk.Button(model_row, text="Apply", command=self._apply_model_to_selected)
+        self.apply_model_button.pack(side=LEFT)
 
         progress = ttk.Frame(parent)
         progress.pack(fill=X)
@@ -471,40 +527,14 @@ class SubtitleCreatorGui:
         )
 
         ttk.Label(frame, text="Model cache").grid(row=9, column=0, sticky=W, pady=(8, 0))
-        ttk.Entry(frame, textvariable=self.model_cache_var, width=34).grid(row=9, column=1, sticky=W, padx=(8, 0), pady=(8, 0))
+        self.model_cache_entry = ttk.Entry(frame, textvariable=self.model_cache_var, width=34)
+        self.model_cache_entry.grid(row=9, column=1, sticky=W, padx=(8, 0), pady=(8, 0))
+        self.model_cache_entry.bind("<FocusOut>", self._on_model_cache_changed)
+        self.model_cache_entry.bind("<Return>", self._on_model_cache_changed)
         ttk.Button(frame, text="Browse", command=self._browse_model_cache).grid(row=9, column=2, sticky=W, padx=(8, 0), pady=(8, 0))
-
-    def _build_models_panel(self, parent: ttk.Frame) -> None:
-        frame = ttk.LabelFrame(parent, text="Model Downloads", padding=12)
-        frame.pack(fill=BOTH, expand=True, pady=(12, 0))
-
-        model_area = ttk.Frame(frame)
-        model_area.pack(fill=BOTH, expand=True)
-        self.model_list = tk.Listbox(model_area, height=8, exportselection=False)
-        self.model_list.configure(
-            activestyle=tk.NONE,
-            background=COLOR_ENTRY,
-            borderwidth=1,
-            foreground=COLOR_TEXT,
-            highlightbackground=COLOR_BORDER,
-            highlightcolor=COLOR_ACCENT,
-            relief=tk.FLAT,
-            selectbackground=COLOR_SELECT,
-            selectforeground=COLOR_TEXT,
-        )
-        self.model_list.pack(fill=BOTH, expand=True, side=LEFT)
-        self.model_list.bind("<<ListboxSelect>>", self._on_model_list_selected)
-        model_scroll = ttk.Scrollbar(model_area, orient=VERTICAL, command=self.model_list.yview)
-        model_scroll.pack(side=RIGHT, fill=tk.Y)
-        self.model_list.configure(yscrollcommand=model_scroll.set)
-
-        ttk.Label(frame, textvariable=self.download_status_var, wraplength=380).pack(fill=X, pady=(8, 6))
-        buttons = ttk.Frame(frame)
-        buttons.pack(fill=X)
-        self.download_button = ttk.Button(buttons, text="Download selected model", command=self._download_selected_model)
-        self.download_button.pack(side=LEFT)
-        ttk.Button(buttons, text="Import model", command=self._import_model).pack(side=LEFT, padx=(8, 0))
-        ttk.Button(buttons, text="Refresh", command=self._refresh_model_list).pack(side=LEFT, padx=(8, 0))
+        ttk.Label(frame, text="Model files").grid(row=10, column=0, sticky=W, pady=(8, 0))
+        self.download_models_button = ttk.Button(frame, text="Download Models", command=self._open_download_window)
+        self.download_models_button.grid(row=10, column=1, sticky=W, padx=(8, 0), pady=(8, 0))
 
     def _build_gpu_panel(self, parent: ttk.Frame) -> None:
         frame = ttk.LabelFrame(parent, text="GPU Setup", padding=12)
@@ -548,7 +578,194 @@ class SubtitleCreatorGui:
             padx=(8, 0),
         )
 
+    def _register_setting_traces(self) -> None:
+        for variable in (
+            self.default_model_var,
+            self.selected_model_var,
+            self.device_var,
+            self.compute_type_var,
+            self.language_var,
+            self.task_var,
+            self.priority_var,
+            self.cpu_threads_var,
+            self.model_cache_var,
+        ):
+            variable.trace_add("write", self._on_setting_changed)
+
+    def _on_setting_changed(self, *_args: object) -> None:
+        self._schedule_settings_save()
+
+    def _on_root_configure(self, event: tk.Event[tk.Misc]) -> None:
+        if event.widget is self.root:
+            self._schedule_settings_save()
+
+    def _schedule_settings_save(self) -> None:
+        if not self.settings_ready:
+            return
+        if self.settings_save_job is not None:
+            self.root.after_cancel(self.settings_save_job)
+        self.settings_save_job = self.root.after(SETTINGS_SAVE_DELAY_MS, self._flush_scheduled_settings_save)
+
+    def _flush_scheduled_settings_save(self) -> None:
+        self.settings_save_job = None
+        self._save_settings()
+
+    def _save_settings(self) -> None:
+        if self.settings_save_job is not None:
+            try:
+                self.root.after_cancel(self.settings_save_job)
+            except tk.TclError:
+                pass
+            self.settings_save_job = None
+        window_geometry = self.root.geometry() if self.root.state() == "normal" else self.saved_settings.window_geometry
+        self.saved_settings = GuiSettings(
+            window_geometry=window_geometry,
+            default_model=self.default_model_var.get(),
+            selected_model=self.selected_model_var.get(),
+            device=self.device_var.get(),
+            compute_type=self.compute_type_var.get(),
+            language=self.language_var.get(),
+            task=self.task_var.get(),
+            priority=self.priority_var.get(),
+            cpu_threads=self.cpu_threads_var.get(),
+            model_cache=self.model_cache_var.get(),
+        )
+        save_gui_settings(self.saved_settings, self.settings_path)
+
+    def _on_close(self) -> None:
+        self._save_settings()
+        self.root.destroy()
+
+    def _local_model_cache_dir(self) -> Path:
+        return Path(self.model_cache_var.get().strip() or default_model_cache())
+
+    def _is_local_model_available(self, model_name: str) -> bool:
+        return model_name in self.local_models
+
+    def _queue_missing_models(self) -> list[QueueItem]:
+        return [item for item in self.items.values() if item.model not in self.local_models]
+
+    def _queue_can_start(self) -> bool:
+        return bool(self.items) and bool(self.local_models) and not self._queue_missing_models()
+
+    def _refresh_model_sources(self) -> None:
+        self.local_models = local_model_names(self._local_model_cache_dir(), self.download_model_names)
+        self.model_names = self.local_models or [NO_MODEL_LABEL]
+        self.default_model_combo.configure(values=self.model_names)
+        self.selected_model_combo.configure(values=self.model_names)
+        self.default_model_var.set(self._initial_model_value(self.default_model_var.get()))
+        self.selected_model_var.set(self._initial_model_value(self.selected_model_var.get()))
+        self._refresh_download_model_list()
+        self._refresh_action_states()
+
+    def _refresh_action_states(self) -> None:
+        running = bool(self.worker and self.worker.is_alive())
+        has_local_models = bool(self.local_models)
+        selected_rows = bool(self.queue_tree.selection())
+
+        if self.add_files_button is not None:
+            self.add_files_button.configure(state=tk.NORMAL if has_local_models and not running else tk.DISABLED)
+        if self.remove_button is not None:
+            self.remove_button.configure(state=tk.NORMAL if selected_rows and not running else tk.DISABLED)
+        if self.clear_button is not None:
+            self.clear_button.configure(state=tk.NORMAL if self.items and not running else tk.DISABLED)
+        if self.apply_model_button is not None:
+            can_apply = has_local_models and selected_rows and self._is_local_model_available(self.selected_model_var.get()) and not running
+            self.apply_model_button.configure(state=tk.NORMAL if can_apply else tk.DISABLED)
+
+        self.start_button.configure(state=tk.NORMAL if not running and self._queue_can_start() else tk.DISABLED)
+        self.stop_button.configure(state=tk.NORMAL if running else tk.DISABLED)
+
+    def _open_download_window(self) -> None:
+        if self.download_window is not None and self.download_window.winfo_exists():
+            self.download_window.deiconify()
+            self.download_window.lift()
+            self.download_window.focus_force()
+            self._refresh_download_model_list()
+            return
+
+        window = tk.Toplevel(self.root)
+        self.download_window = window
+        self._set_window_icon(window)
+        window.title("Download Models")
+        window.geometry("560x560")
+        window.minsize(520, 500)
+        window.configure(bg=COLOR_BG)
+        window.transient(self.root)
+        window.protocol("WM_DELETE_WINDOW", self._close_download_window)
+
+        frame = ttk.Frame(window, padding=16)
+        frame.pack(fill=BOTH, expand=True)
+
+        ttk.Label(
+            frame,
+            text="Downloads use faster-whisper model packages from the Hugging Face Hub. "
+            "Imported models are copied into the selected model cache folder.",
+            style="Muted.TLabel",
+            wraplength=500,
+        ).pack(fill=X)
+
+        model_area = ttk.Frame(frame)
+        model_area.pack(fill=BOTH, expand=True, pady=(12, 0))
+        self.model_list = tk.Listbox(model_area, height=12, exportselection=False)
+        self.model_list.configure(
+            activestyle=tk.NONE,
+            background=COLOR_ENTRY,
+            borderwidth=1,
+            foreground=COLOR_TEXT,
+            highlightbackground=COLOR_BORDER,
+            highlightcolor=COLOR_ACCENT,
+            relief=tk.FLAT,
+            selectbackground=COLOR_SELECT,
+            selectforeground=COLOR_TEXT,
+        )
+        self.model_list.pack(fill=BOTH, expand=True, side=LEFT)
+        self.model_list.bind("<<ListboxSelect>>", self._on_model_list_selected)
+        model_scroll = ttk.Scrollbar(model_area, orient=VERTICAL, command=self.model_list.yview)
+        model_scroll.pack(side=RIGHT, fill=tk.Y)
+        self.model_list.configure(yscrollcommand=model_scroll.set)
+
+        ttk.Label(frame, textvariable=self.download_status_var, wraplength=500).pack(fill=X, pady=(10, 6))
+        progress_row = ttk.Frame(frame)
+        progress_row.pack(fill=X)
+        self.download_progress = ttk.Progressbar(
+            progress_row,
+            orient=tk.HORIZONTAL,
+            mode="determinate",
+            maximum=100,
+            variable=self.download_progress_var,
+        )
+        self.download_progress.pack(fill=X, side=LEFT, expand=True)
+        ttk.Label(progress_row, textvariable=self.download_percent_var, width=10).pack(side=LEFT, padx=(8, 0))
+
+        buttons = ttk.Frame(frame)
+        buttons.pack(fill=X, pady=(10, 0))
+        self.download_button = ttk.Button(buttons, text="Download selected model", command=self._download_selected_model)
+        self.download_button.pack(side=LEFT)
+        self.import_button = ttk.Button(buttons, text="Import model", command=self._import_model)
+        self.import_button.pack(side=LEFT, padx=(8, 0))
+        ttk.Button(buttons, text="Refresh", command=self._refresh_download_model_list).pack(side=LEFT, padx=(8, 0))
+        ttk.Button(buttons, text="Close", command=self._close_download_window).pack(side=RIGHT)
+
+        if self.download_in_progress:
+            self.download_button.configure(state=tk.DISABLED)
+            self.import_button.configure(state=tk.DISABLED)
+
+        self._refresh_download_model_list()
+
+    def _close_download_window(self) -> None:
+        if self.download_window is not None and self.download_window.winfo_exists():
+            self.download_window.destroy()
+        self.download_window = None
+        self.model_list = None
+        self.download_button = None
+        self.import_button = None
+        self.download_progress = None
+
     def _add_files(self) -> None:
+        if not self.local_models:
+            messagebox.showinfo("No model downloaded", "Download or import at least one local model before adding media files.")
+            return
         filenames = filedialog.askopenfilenames(title="Select media files", filetypes=MEDIA_PATTERNS)
         for filename in filenames:
             path = Path(filename)
@@ -561,6 +778,7 @@ class SubtitleCreatorGui:
             )
             self.items[item_id] = QueueItem(item_id=item_id, input_path=path, model=self.default_model_var.get())
         self._update_queue_progress()
+        self._refresh_action_states()
 
     def _remove_selected(self) -> None:
         if self.worker and self.worker.is_alive():
@@ -570,6 +788,7 @@ class SubtitleCreatorGui:
             self.queue_tree.delete(item_id)
             self.items.pop(item_id, None)
         self._update_queue_progress()
+        self._refresh_action_states()
 
     def _clear_queue(self) -> None:
         if self.worker and self.worker.is_alive():
@@ -582,27 +801,36 @@ class SubtitleCreatorGui:
         self.current_fraction = 0
         self.current_progress["value"] = 0
         self._update_queue_progress()
+        self._refresh_action_states()
 
     def _on_queue_selection(self, _event: object | None = None) -> None:
         selection = self.queue_tree.selection()
         if len(selection) == 1 and selection[0] in self.items:
-            self.selected_model_var.set(self.items[selection[0]].model)
+            item_model = self.items[selection[0]].model
+            self.selected_model_var.set(item_model if self._is_local_model_available(item_model) else self._initial_model_value(None))
+        self._refresh_action_states()
 
     def _apply_model_to_selected(self) -> None:
         model = self.selected_model_var.get()
+        if not self._is_local_model_available(model):
+            messagebox.showinfo("No model downloaded", "Select a local model before applying it to queued files.")
+            return
         for item_id in self.queue_tree.selection():
             item = self.items.get(item_id)
             if not item:
                 continue
             item.model = model
             self.queue_tree.set(item_id, "model", model)
+        self._refresh_action_states()
 
     def _browse_model_cache(self) -> None:
         directory = filedialog.askdirectory(title="Select model cache directory", initialdir=self.model_cache_var.get())
         if directory:
             self.model_cache_var.set(directory)
-            self._refresh_model_choices()
-            self._refresh_model_list()
+            self._refresh_model_sources()
+
+    def _on_model_cache_changed(self, _event: object | None = None) -> None:
+        self._refresh_model_sources()
 
     def _on_device_changed(self, _event: object | None = None) -> None:
         if self.device_var.get() == "cuda" and self.compute_type_var.get() == "int8":
@@ -652,14 +880,25 @@ class SubtitleCreatorGui:
     def _start_queue(self) -> None:
         if self.worker and self.worker.is_alive():
             return
+        if not self.local_models:
+            messagebox.showinfo("No model downloaded", "Download or import at least one local model before starting the queue.")
+            return
         queued = [item for item in self.items.values() if item.status in {"Queued", "Failed", "Done"}]
         if not queued:
             messagebox.showinfo("Empty queue", "Add at least one media file.")
+            return
+        missing_models = self._queue_missing_models()
+        if missing_models:
+            messagebox.showinfo(
+                "Model required",
+                "Every queued file must use a local model. Select the affected rows and apply one of the downloaded models.",
+            )
             return
         cpu_threads = self._cpu_threads()
         if cpu_threads is None:
             return
         self.active_cpu_threads = cpu_threads
+        self.active_model_cache_dir = self._local_model_cache_dir()
         self._apply_selected_priority(show_errors=True)
         self.stop_requested = False
         self.completed_count = 0
@@ -672,6 +911,7 @@ class SubtitleCreatorGui:
             self.queue_tree.set(item.item_id, "status", item.status)
         self.worker = threading.Thread(target=self._run_queue_worker, daemon=True)
         self.worker.start()
+        self._refresh_action_states()
 
     def _request_stop(self) -> None:
         self.stop_requested = True
@@ -680,7 +920,7 @@ class SubtitleCreatorGui:
     def _run_queue_worker(self) -> None:
         items = list(self.items.values())
         backend = create_backend(BackendName.FASTER_WHISPER)
-        cache_dir = Path(self.model_cache_var.get())
+        cache_dir = self.active_model_cache_dir
 
         for index, item in enumerate(items):
             if self.stop_requested:
@@ -762,18 +1002,40 @@ class SubtitleCreatorGui:
         elif event_name == "queue_done":
             self.active_item_id = None
             self.current_fraction = 0
-            self.start_button.configure(state=tk.NORMAL)
-            self.stop_button.configure(state=tk.DISABLED)
             self.status_var.set("Queue finished" if not self.stop_requested else "Queue stopped")
             self._update_queue_progress(final=True)
+            self._refresh_action_states()
+        elif event_name == "download_progress":
+            model_name, completed, total = payload  # type: ignore[misc]
+            if total > 0:
+                percent = max(0.0, min(100.0, (float(completed) / float(total)) * 100.0))
+                self.download_progress_var.set(percent)
+                self.download_percent_var.set(f"{percent:.0f}%")
+                self.download_status_var.set(f"Downloading {model_name}... {completed:,} / {total:,} bytes")
+            else:
+                self.download_progress_var.set(0.0)
+                self.download_percent_var.set("...")
+                self.download_status_var.set(f"Preparing download for {model_name}...")
         elif event_name == "download_done":
             model_name, path = payload  # type: ignore[misc]
-            self.download_button.configure(state=tk.NORMAL)
+            self.download_in_progress = False
+            if self.download_button is not None:
+                self.download_button.configure(state=tk.NORMAL)
+            if self.import_button is not None:
+                self.import_button.configure(state=tk.NORMAL)
+            self.download_progress_var.set(100.0)
+            self.download_percent_var.set("100%")
+            self._refresh_model_sources()
             self.download_status_var.set(f"Downloaded {model_name} to {path}")
-            self._refresh_model_list()
         elif event_name == "download_failed":
             model_name, message, details = payload  # type: ignore[misc]
-            self.download_button.configure(state=tk.NORMAL)
+            self.download_in_progress = False
+            if self.download_button is not None:
+                self.download_button.configure(state=tk.NORMAL)
+            if self.import_button is not None:
+                self.import_button.configure(state=tk.NORMAL)
+            self.download_progress_var.set(0.0)
+            self.download_percent_var.set("")
             self.download_status_var.set(f"Failed to download {model_name}: {message}")
             messagebox.showerror("Download failed", f"{message}\n\n{details}")
 
@@ -790,11 +1052,12 @@ class SubtitleCreatorGui:
             return
         self.queue_progress["value"] = ((self.completed_count + self.current_fraction) / total) * 100
 
-    def _refresh_model_list(self) -> None:
+    def _refresh_download_model_list(self) -> None:
+        if self.model_list is None:
+            return
         selected = self._selected_download_model()
         self.model_list.delete(0, END)
-        cache_dir = Path(self.model_cache_var.get())
-        self._refresh_model_choices()
+        cache_dir = self._local_model_cache_dir()
         for model_name in self.download_model_names:
             status = "cached" if is_model_downloaded(model_name, cache_dir) else "not downloaded"
             self.model_list.insert(END, f"{model_name} [{status}]")
@@ -805,7 +1068,9 @@ class SubtitleCreatorGui:
         self._on_model_list_selected()
 
     def _selected_download_model(self) -> str | None:
-        selection = self.model_list.curselection() if hasattr(self, "model_list") else ()
+        if self.model_list is None:
+            return None
+        selection = self.model_list.curselection()
         if not selection:
             return None
         return self.download_model_names[selection[0]]
@@ -815,7 +1080,7 @@ class SubtitleCreatorGui:
         if not model_name:
             self.download_status_var.set("Select a model to download.")
             return
-        cached = is_model_downloaded(model_name, Path(self.model_cache_var.get()))
+        cached = is_model_downloaded(model_name, self._local_model_cache_dir())
         status = "Downloaded" if cached else "Not downloaded"
         self.download_status_var.set(f"{model_name}: {status}. {describe_model(model_name)}")
 
@@ -824,9 +1089,16 @@ class SubtitleCreatorGui:
         if not model_name:
             messagebox.showinfo("No model selected", "Select a model from the list first.")
             return
-        self.download_button.configure(state=tk.DISABLED)
-        self.download_status_var.set(f"Downloading {model_name}...")
-        thread = threading.Thread(target=self._download_model_worker, args=(model_name,), daemon=True)
+        cache_dir = self._local_model_cache_dir()
+        self.download_in_progress = True
+        if self.download_button is not None:
+            self.download_button.configure(state=tk.DISABLED)
+        if self.import_button is not None:
+            self.import_button.configure(state=tk.DISABLED)
+        self.download_progress_var.set(0.0)
+        self.download_percent_var.set("0%")
+        self.download_status_var.set(f"Preparing download for {model_name}...")
+        thread = threading.Thread(target=self._download_model_worker, args=(model_name, cache_dir), daemon=True)
         thread.start()
 
     def _import_model(self) -> None:
@@ -840,26 +1112,21 @@ class SubtitleCreatorGui:
         if not filename:
             return
         try:
-            imported_path = import_model_to_cache(Path(filename), Path(self.model_cache_var.get()))
-            self._refresh_model_choices()
+            imported_path = import_model_to_cache(Path(filename), self._local_model_cache_dir())
+            self._refresh_model_sources()
             self.download_status_var.set(f"Imported local:{imported_path.name} to {imported_path}")
         except Exception as exc:
             messagebox.showerror("Import model", f"Could not import model: {exc}")
 
-    def _refresh_model_choices(self) -> None:
-        cache_dir = Path(self.model_cache_var.get())
-        current_values = [*self.download_model_names, *imported_model_names(cache_dir)]
-        self.model_names = current_values
-        self.default_model_combo.configure(values=current_values)
-        self.selected_model_combo.configure(values=current_values)
-        if self.default_model_var.get() not in current_values and current_values:
-            self.default_model_var.set(current_values[0])
-        if self.selected_model_var.get() not in current_values and current_values:
-            self.selected_model_var.set(self.default_model_var.get())
-
-    def _download_model_worker(self, model_name: str) -> None:
+    def _download_model_worker(self, model_name: str, cache_dir: Path) -> None:
         try:
-            path = download_model_to_cache(model_name, Path(self.model_cache_var.get()))
+            path = download_model_to_cache(
+                model_name,
+                cache_dir,
+                progress_callback=lambda completed, total: self.events.put(
+                    ("download_progress", (model_name, completed, total))
+                ),
+            )
             self.events.put(("download_done", (model_name, str(path))))
         except Exception as exc:
             self.events.put(("download_failed", (model_name, str(exc), traceback.format_exc())))
