@@ -11,6 +11,7 @@ from rich.progress import BarColumn, Progress, TaskProgressColumn, TextColumn, T
 
 from ai_subtitle_creator.backends import BackendName, create_backend
 from ai_subtitle_creator.models import TaskName, TranscriptionOptions
+from ai_subtitle_creator.process_priority import ProcessPriority, apply_process_priority
 from ai_subtitle_creator.subtitles import SrtOptions, write_srt
 
 app = typer.Typer(
@@ -75,6 +76,10 @@ def transcribe(
         int,
         typer.Option("--cpu-threads", min=0, help="CPU worker threads. 0 lets the backend choose."),
     ] = 0,
+    process_priority: Annotated[
+        ProcessPriority,
+        typer.Option("--process-priority", help="Current process CPU priority."),
+    ] = ProcessPriority.NORMAL,
     model_cache: Annotated[
         Path | None,
         typer.Option("--model-cache", help="Directory for downloaded or cached models."),
@@ -108,6 +113,11 @@ def transcribe(
     )
 
     console.print(f"Transcribing [bold]{input_file}[/bold] with [bold]{backend.value}[/bold] ({model})")
+    try:
+        apply_process_priority(process_priority)
+    except Exception as exc:
+        console.print(f"[red]Error:[/red] Could not set process priority: {exc}")
+        raise typer.Exit(1) from exc
     transcription_backend = create_backend(backend)
 
     try:

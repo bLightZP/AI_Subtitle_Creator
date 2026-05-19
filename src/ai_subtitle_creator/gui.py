@@ -22,6 +22,7 @@ from ai_subtitle_creator.model_catalog import (
     is_model_downloaded,
 )
 from ai_subtitle_creator.models import TaskName, TranscriptionOptions
+from ai_subtitle_creator.process_priority import apply_process_priority, priority_from_label, priority_labels
 from ai_subtitle_creator.subtitles import SrtOptions, write_srt
 
 MEDIA_PATTERNS = (
@@ -89,6 +90,7 @@ class SubtitleCreatorGui:
         self.worker: threading.Thread | None = None
         self.stop_requested = False
         self.active_item_id: str | None = None
+        self.active_cpu_threads = 0
         self.completed_count = 0
         self.current_fraction = 0.0
 
@@ -98,6 +100,8 @@ class SubtitleCreatorGui:
         self.compute_type_var = tk.StringVar(value="int8")
         self.language_var = tk.StringVar(value="")
         self.task_var = tk.StringVar(value=TaskName.TRANSCRIBE.value)
+        self.priority_var = tk.StringVar(value="Below normal")
+        self.cpu_threads_var = tk.StringVar(value="0")
         self.model_cache_var = tk.StringVar(value=str(default_model_cache()))
         self.status_var = tk.StringVar(value="Ready")
         self.current_label_var = tk.StringVar(value="Current file: idle")
@@ -107,6 +111,7 @@ class SubtitleCreatorGui:
 
         self._configure_styles()
         self._build_layout()
+        self._apply_selected_priority(show_errors=False)
         self._update_task_help()
         self._refresh_model_list()
         self.root.after(100, self._drain_events)
@@ -428,20 +433,34 @@ class SubtitleCreatorGui:
         task_box.grid(row=3, column=1, sticky=W, padx=(8, 0), pady=(8, 0))
         task_box.bind("<<ComboboxSelected>>", self._on_task_changed)
 
-        ttk.Label(frame, text="Language (source)").grid(row=4, column=0, sticky=W, pady=(8, 0))
-        ttk.Entry(frame, textvariable=self.language_var, width=25).grid(row=4, column=1, sticky=W, padx=(8, 0), pady=(8, 0))
+        ttk.Label(frame, text="CPU priority").grid(row=4, column=0, sticky=W, pady=(8, 0))
+        priority_box = ttk.Combobox(
+            frame,
+            textvariable=self.priority_var,
+            values=priority_labels(),
+            state="readonly",
+            width=22,
+        )
+        priority_box.grid(row=4, column=1, sticky=W, padx=(8, 0), pady=(8, 0))
+        priority_box.bind("<<ComboboxSelected>>", self._on_priority_changed)
+
+        ttk.Label(frame, text="CPU threads").grid(row=5, column=0, sticky=W, pady=(8, 0))
+        ttk.Entry(frame, textvariable=self.cpu_threads_var, width=25).grid(row=5, column=1, sticky=W, padx=(8, 0), pady=(8, 0))
+
+        ttk.Label(frame, text="Language (source)").grid(row=6, column=0, sticky=W, pady=(8, 0))
+        ttk.Entry(frame, textvariable=self.language_var, width=25).grid(row=6, column=1, sticky=W, padx=(8, 0), pady=(8, 0))
 
         ttk.Label(frame, textvariable=self.task_help_var, wraplength=410).grid(
-            row=5,
+            row=7,
             column=0,
             columnspan=3,
             sticky=W,
             pady=(8, 0),
         )
 
-        ttk.Label(frame, text="Model cache").grid(row=6, column=0, sticky=W, pady=(8, 0))
-        ttk.Entry(frame, textvariable=self.model_cache_var, width=34).grid(row=6, column=1, sticky=W, padx=(8, 0), pady=(8, 0))
-        ttk.Button(frame, text="Browse", command=self._browse_model_cache).grid(row=6, column=2, sticky=W, padx=(8, 0), pady=(8, 0))
+        ttk.Label(frame, text="Model cache").grid(row=8, column=0, sticky=W, pady=(8, 0))
+        ttk.Entry(frame, textvariable=self.model_cache_var, width=34).grid(row=8, column=1, sticky=W, padx=(8, 0), pady=(8, 0))
+        ttk.Button(frame, text="Browse", command=self._browse_model_cache).grid(row=8, column=2, sticky=W, padx=(8, 0), pady=(8, 0))
 
     def _build_models_panel(self, parent: ttk.Frame) -> None:
         frame = ttk.LabelFrame(parent, text="Model Downloads", padding=12)
@@ -576,6 +595,29 @@ class SubtitleCreatorGui:
         elif self.device_var.get() == "cpu" and self.compute_type_var.get() == "float16":
             self.compute_type_var.set("int8")
 
+    def _on_priority_changed(self, _event: object | None = None) -> None:
+        self._apply_selected_priority(show_errors=True)
+
+    def _apply_selected_priority(self, *, show_errors: bool) -> None:
+        try:
+            apply_process_priority(priority_from_label(self.priority_var.get()))
+            if show_errors:
+                self.status_var.set(f"CPU priority: {self.priority_var.get()}")
+        except Exception as exc:
+            if show_errors:
+                messagebox.showerror("CPU priority", f"Could not set process priority: {exc}")
+
+    def _cpu_threads(self) -> int | None:
+        try:
+            cpu_threads = int(self.cpu_threads_var.get().strip() or "0")
+        except ValueError:
+            messagebox.showerror("CPU threads", "CPU threads must be a whole number. Use 0 for backend auto-selection.")
+            return None
+        if cpu_threads < 0:
+            messagebox.showerror("CPU threads", "CPU threads cannot be negative. Use 0 for backend auto-selection.")
+            return None
+        return cpu_threads
+
     def _on_task_changed(self, _event: object | None = None) -> None:
         self._update_task_help()
 
@@ -599,6 +641,11 @@ class SubtitleCreatorGui:
         if not queued:
             messagebox.showinfo("Empty queue", "Add at least one media file.")
             return
+        cpu_threads = self._cpu_threads()
+        if cpu_threads is None:
+            return
+        self.active_cpu_threads = cpu_threads
+        self._apply_selected_priority(show_errors=True)
         self.stop_requested = False
         self.completed_count = 0
         self.current_fraction = 0
@@ -634,7 +681,7 @@ class SubtitleCreatorGui:
                         device=self.device_var.get(),
                         compute_type=self.compute_type_var.get(),
                         beam_size=5,
-                        cpu_threads=0,
+                        cpu_threads=self.active_cpu_threads,
                         model_cache=cache_dir,
                         vad_filter=True,
                         progress_callback=lambda completed, total, item_id=item.item_id: self.events.put(
