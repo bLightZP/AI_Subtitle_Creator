@@ -17,8 +17,6 @@ hiddenimports = [
 excludes = [
     "IPython",
     "_pytest",
-    "ctranslate2.converters",
-    "ctranslate2.specs",
     "fsspec.gui",
     "matplotlib",
     "notebook",
