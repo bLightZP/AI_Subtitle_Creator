@@ -1,0 +1,39 @@
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ai-subtitle-creator"
+version = "0.1.0"
+description = "Local AI subtitle creator for media files."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+    { name = "AI Subtitle Creator contributors" }
+]
+dependencies = [
+    "faster-whisper>=1.1,<2",
+    "rich>=13.7,<15",
+    "typer>=0.12,<1",
+]
+
+[project.optional-dependencies]
+build = [
+    "pyinstaller>=6.11,<7",
+]
+dev = [
+    "pytest>=8,<9",
+]
+
+[project.scripts]
+aisub = "ai_subtitle_creator.cli:app"
+aisub-gui = "ai_subtitle_creator.gui:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ai_subtitle_creator"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
