@@ -57,6 +57,19 @@ MODEL_ALLOW_PATTERNS = [
 DownloadProgressCallback = Callable[[int, int], None]
 
 
+class _NullTqdmFile:
+    """Headless text sink for tqdm in windowed GUI builds."""
+
+    def write(self, _text: str) -> int:
+        return 0
+
+    def flush(self) -> None:
+        return None
+
+    def isatty(self) -> bool:
+        return False
+
+
 def default_model_cache() -> Path:
     """Return the default model cache next to the app or current project."""
     if getattr(sys, "frozen", False):
@@ -157,6 +170,7 @@ def download_model_to_cache(
 
     class DownloadProgressBar(tqdm):
         def __init__(self, *args, **kwargs):
+            kwargs.setdefault("file", _NullTqdmFile())
             self._report_progress = kwargs.get("unit") == "B"
             self._last_report = (-1, -1)
             super().__init__(*args, **kwargs)
