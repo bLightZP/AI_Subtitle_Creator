@@ -19,6 +19,8 @@ from ai_subtitle_creator.model_catalog import (
     default_model_cache,
     describe_model,
     download_model_to_cache,
+    download_model_size_bytes,
+    format_model_size,
     import_model_to_cache,
     is_model_downloaded,
     local_model_names,
@@ -110,6 +112,8 @@ class SubtitleCreatorGui:
         self.settings_ready = False
         self.download_in_progress = False
         self.download_window: tk.Toplevel | None = None
+        self.download_model_sizes: dict[str, int | None] = {}
+        self.download_size_worker: threading.Thread | None = None
         self.model_list: tk.Listbox | None = None
         self.download_button: ttk.Button | None = None
         self.import_button: ttk.Button | None = None
@@ -678,6 +682,7 @@ class SubtitleCreatorGui:
 
     def _open_download_window(self) -> None:
         if self.download_window is not None and self.download_window.winfo_exists():
+            self._center_window_over_root(self.download_window)
             self.download_window.deiconify()
             self.download_window.lift()
             self.download_window.focus_force()
@@ -685,10 +690,10 @@ class SubtitleCreatorGui:
             return
 
         window = tk.Toplevel(self.root)
+        window.withdraw()
         self.download_window = window
         self._set_window_icon(window)
         window.title("Download Models")
-        window.geometry("560x560")
         window.minsize(520, 500)
         window.configure(bg=COLOR_BG)
         window.transient(self.root)
@@ -744,7 +749,7 @@ class SubtitleCreatorGui:
         self.download_button.pack(side=LEFT)
         self.import_button = ttk.Button(buttons, text="Import model", command=self._import_model)
         self.import_button.pack(side=LEFT, padx=(8, 0))
-        ttk.Button(buttons, text="Refresh", command=self._refresh_download_model_list).pack(side=LEFT, padx=(8, 0))
+        ttk.Button(buttons, text="Refresh", command=self._refresh_download_window_models).pack(side=LEFT, padx=(8, 0))
         ttk.Button(buttons, text="Close", command=self._close_download_window).pack(side=RIGHT)
 
         if self.download_in_progress:
@@ -752,6 +757,9 @@ class SubtitleCreatorGui:
             self.import_button.configure(state=tk.DISABLED)
 
         self._refresh_download_model_list()
+        self._start_download_size_worker()
+        self._center_window_over_root(window)
+        window.deiconify()
 
     def _close_download_window(self) -> None:
         if self.download_window is not None and self.download_window.winfo_exists():
@@ -761,6 +769,17 @@ class SubtitleCreatorGui:
         self.download_button = None
         self.import_button = None
         self.download_progress = None
+
+    def _center_window_over_root(self, window: tk.Toplevel, width: int = 560, height: int = 560) -> None:
+        self.root.update_idletasks()
+        window.update_idletasks()
+        root_x = self.root.winfo_rootx()
+        root_y = self.root.winfo_rooty()
+        root_width = max(self.root.winfo_width(), 1)
+        root_height = max(self.root.winfo_height(), 1)
+        x = root_x + max((root_width - width) // 2, 0)
+        y = root_y + max((root_height - height) // 2, 0)
+        window.geometry(f"{width}x{height}+{x}+{y}")
 
     def _add_files(self) -> None:
         if not self.local_models:
@@ -1038,6 +1057,12 @@ class SubtitleCreatorGui:
             self.download_percent_var.set("")
             self.download_status_var.set(f"Failed to download {model_name}: {message}")
             messagebox.showerror("Download failed", f"{message}\n\n{details}")
+        elif event_name == "download_model_size":
+            model_name, size_bytes = payload  # type: ignore[misc]
+            self.download_model_sizes[model_name] = size_bytes
+            self._refresh_download_model_list()
+        elif event_name == "download_model_sizes_done":
+            self.download_size_worker = None
 
     def _update_queue_progress(self, final: bool = False) -> None:
         total = len(self.items)
@@ -1060,12 +1085,22 @@ class SubtitleCreatorGui:
         cache_dir = self._local_model_cache_dir()
         for model_name in self.download_model_names:
             status = "cached" if is_model_downloaded(model_name, cache_dir) else "not downloaded"
-            self.model_list.insert(END, f"{model_name} [{status}]")
+            self.model_list.insert(END, f"{self._download_model_display_name(model_name)} [{status}]")
         if selected and selected in self.download_model_names:
             index = self.download_model_names.index(selected)
             self.model_list.selection_set(index)
             self.model_list.see(index)
         self._on_model_list_selected()
+
+    def _refresh_download_window_models(self) -> None:
+        self._refresh_download_model_list()
+        self._start_download_size_worker()
+
+    def _download_model_display_name(self, model_name: str) -> str:
+        size_text = format_model_size(self.download_model_sizes.get(model_name))
+        if size_text:
+            return f"{model_name} ({size_text})"
+        return model_name
 
     def _selected_download_model(self) -> str | None:
         if self.model_list is None:
@@ -1082,7 +1117,9 @@ class SubtitleCreatorGui:
             return
         cached = is_model_downloaded(model_name, self._local_model_cache_dir())
         status = "Downloaded" if cached else "Not downloaded"
-        self.download_status_var.set(f"{model_name}: {status}. {describe_model(model_name)}")
+        size_text = format_model_size(self.download_model_sizes.get(model_name))
+        size_suffix = f" Size: {size_text}." if size_text else ""
+        self.download_status_var.set(f"{model_name}: {status}.{size_suffix} {describe_model(model_name)}")
 
     def _download_selected_model(self) -> None:
         model_name = self._selected_download_model()
@@ -1130,6 +1167,26 @@ class SubtitleCreatorGui:
             self.events.put(("download_done", (model_name, str(path))))
         except Exception as exc:
             self.events.put(("download_failed", (model_name, str(exc), traceback.format_exc())))
+
+    def _start_download_size_worker(self) -> None:
+        if self.download_size_worker is not None and self.download_size_worker.is_alive():
+            return
+        missing_models = [
+            model_name for model_name in self.download_model_names if self.download_model_sizes.get(model_name) is None
+        ]
+        if not missing_models:
+            return
+        self.download_size_worker = threading.Thread(target=self._download_size_worker, args=(missing_models,), daemon=True)
+        self.download_size_worker.start()
+
+    def _download_size_worker(self, model_names: list[str]) -> None:
+        for model_name in model_names:
+            try:
+                size_bytes = download_model_size_bytes(model_name)
+            except Exception:
+                size_bytes = None
+            self.events.put(("download_model_size", (model_name, size_bytes)))
+        self.events.put(("download_model_sizes_done", None))
 
     def _check_gpu(self) -> None:
         count = cuda_device_count()

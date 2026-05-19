@@ -5,6 +5,7 @@ from __future__ import annotations
 import shutil
 import sys
 from collections.abc import Callable, Sequence
+from fnmatch import fnmatch
 from pathlib import Path
 
 MODEL_DESCRIPTIONS = {
@@ -112,6 +113,37 @@ def local_model_names(cache_dir: Path, downloadable_names: Sequence[str] | None 
     names = list(downloadable_names or available_model_names())
     downloaded = [name for name in names if is_model_downloaded(name, cache_dir)]
     return [*downloaded, *imported_model_names(cache_dir)]
+
+
+def download_model_size_bytes(model_name: str) -> int | None:
+    """Return the remote download size for a faster-whisper model when known."""
+
+    from faster_whisper.utils import _MODELS
+    from huggingface_hub import model_info
+
+    repo_id = model_name if "/" in model_name else _MODELS.get(model_name)
+    if repo_id is None:
+        return None
+
+    info = model_info(repo_id, files_metadata=True, timeout=10)
+    total_size = 0
+    for sibling in info.siblings or []:
+        filename = getattr(sibling, "rfilename", "")
+        size = getattr(sibling, "size", None)
+        if size is None or not _is_model_download_file(filename):
+            continue
+        total_size += int(size)
+    return total_size or None
+
+
+def format_model_size(size_bytes: int | None) -> str:
+    """Format a model size using mb below 1 gb and gb above it."""
+
+    if size_bytes is None or size_bytes <= 0:
+        return ""
+    if size_bytes < 1_000_000_000:
+        return f"{size_bytes / 1_000_000:.0f} mb"
+    return f"{size_bytes / 1_000_000_000:.1f} gb"
 
 
 def resolve_model_reference(model_name: str, cache_dir: Path | None) -> str:
@@ -249,6 +281,10 @@ def _unique_destination(parent: Path, name: str) -> Path:
         destination = parent / f"{safe_name}-{counter}"
         counter += 1
     return destination
+
+
+def _is_model_download_file(filename: str) -> bool:
+    return any(fnmatch(filename, pattern) for pattern in MODEL_ALLOW_PATTERNS)
 
 
 def cuda_device_count() -> int:

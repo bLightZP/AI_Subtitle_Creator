@@ -5,6 +5,8 @@ from ai_subtitle_creator.model_catalog import (
     imported_model_names,
     local_model_names,
     download_model_to_cache,
+    download_model_size_bytes,
+    format_model_size,
     resolve_model_reference,
     available_model_names,
     describe_model,
@@ -85,4 +87,30 @@ def test_download_model_progress_works_when_stderr_is_none(monkeypatch, tmp_path
 
     assert model_path == tmp_path / "downloaded-model"
     assert progress_updates[-1] == (100, 100)
+
+
+def test_download_model_size_bytes_sums_known_model_files(monkeypatch) -> None:
+    class FakeSibling:
+        def __init__(self, rfilename: str, size: int | None) -> None:
+            self.rfilename = rfilename
+            self.size = size
+
+    class FakeInfo:
+        siblings = [
+            FakeSibling("config.json", 100),
+            FakeSibling("model.bin", 2_000_000),
+            FakeSibling("tokenizer.json", 300),
+            FakeSibling("README.md", 900_000),
+            FakeSibling("vocabulary.json", None),
+        ]
+
+    monkeypatch.setattr("huggingface_hub.model_info", lambda *_args, **_kwargs: FakeInfo())
+
+    assert download_model_size_bytes("tiny") == 2_000_400
+
+
+def test_format_model_size_uses_mb_and_gb_units() -> None:
+    assert format_model_size(None) == ""
+    assert format_model_size(42_400_000) == "42 mb"
+    assert format_model_size(1_550_000_000) == "1.6 gb"
 
