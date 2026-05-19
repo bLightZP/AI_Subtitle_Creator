@@ -6,6 +6,7 @@ import ctypes
 import os
 import sys
 from enum import Enum
+from ctypes import wintypes
 
 
 class ProcessPriority(str, Enum):
@@ -57,10 +58,13 @@ def _apply_windows_priority(priority: ProcessPriority) -> None:
         ProcessPriority.HIGH: 0x00000080,
     }
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+    kernel32.SetPriorityClass.argtypes = (wintypes.HANDLE, wintypes.DWORD)
+    kernel32.SetPriorityClass.restype = wintypes.BOOL
     handle = kernel32.GetCurrentProcess()
     if not kernel32.SetPriorityClass(handle, priority_classes[priority]):
         error_code = ctypes.get_last_error()
-        raise OSError(error_code, "SetPriorityClass failed")
+        raise OSError(error_code, ctypes.FormatError(error_code))
 
 
 def _apply_posix_priority(priority: ProcessPriority) -> None:
