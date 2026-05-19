@@ -28,7 +28,7 @@ Launch the GUI queue manager from a development install:
 aisub-gui
 ```
 
-The GUI lets you queue multiple media files, choose a model per file, download models into the configured cache, and track both current-file and full-queue progress.
+The GUI lets you queue multiple media files, choose a model per file, download models into the configured cache, import local models into the app model folder, and track both current-file and full-queue progress.
 
 Choose an output file and model:
 
@@ -49,6 +49,8 @@ aisub .\movie.mp4 --process-priority idle --cpu-threads 2
 ```
 
 The GUI exposes the same controls as `CPU priority` and `CPU threads`. `CPU priority` adjusts the current app process priority, which affects its native inference worker threads. `Idle` is the lowest-impact option. `CPU threads` limits faster-whisper CPU worker threads; use `0` to let the backend choose automatically.
+
+Models downloaded from the GUI or CLI are resolved by `faster-whisper` through the Hugging Face Hub, using the model names returned by `faster_whisper.available_models()`. The common built-in names map to CTranslate2 faster-whisper repositories such as `Systran/faster-whisper-small`, then the files are cached under the configured model cache folder.
 
 Limit how long a single cue stays on screen:
 

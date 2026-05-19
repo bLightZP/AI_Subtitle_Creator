@@ -19,7 +19,10 @@ from ai_subtitle_creator.model_catalog import (
     default_model_cache,
     describe_model,
     download_model_to_cache,
+    imported_model_names,
+    import_model_to_cache,
     is_model_downloaded,
+    resolve_model_reference,
 )
 from ai_subtitle_creator.models import TaskName, TranscriptionOptions
 from ai_subtitle_creator.process_priority import apply_process_priority, priority_from_label, priority_labels
@@ -84,7 +87,8 @@ class SubtitleCreatorGui:
         self.root.geometry("1120x760")
         self.root.minsize(980, 650)
 
-        self.model_names = available_model_names()
+        self.download_model_names = available_model_names()
+        self.model_names = [*self.download_model_names]
         self.items: dict[str, QueueItem] = {}
         self.events: queue.Queue[tuple[str, object]] = queue.Queue()
         self.worker: threading.Thread | None = None
@@ -415,7 +419,8 @@ class SubtitleCreatorGui:
         ).grid(row=2, column=0, columnspan=3, sticky=W, pady=(4, 0))
 
         ttk.Label(frame, text="Default model").grid(row=3, column=0, sticky=W, pady=(8, 0))
-        ttk.Combobox(frame, textvariable=self.default_model_var, values=self.model_names, state="readonly", width=22).grid(
+        self.default_model_combo = ttk.Combobox(frame, textvariable=self.default_model_var, values=self.model_names, state="readonly", width=22)
+        self.default_model_combo.grid(
             row=3,
             column=1,
             sticky=W,
@@ -477,6 +482,7 @@ class SubtitleCreatorGui:
         model_area.pack(fill=BOTH, expand=True)
         self.model_list = tk.Listbox(model_area, height=8, exportselection=False)
         self.model_list.configure(
+            activestyle=tk.NONE,
             background=COLOR_ENTRY,
             borderwidth=1,
             foreground=COLOR_TEXT,
@@ -497,6 +503,7 @@ class SubtitleCreatorGui:
         buttons.pack(fill=X)
         self.download_button = ttk.Button(buttons, text="Download selected model", command=self._download_selected_model)
         self.download_button.pack(side=LEFT)
+        ttk.Button(buttons, text="Import model", command=self._import_model).pack(side=LEFT, padx=(8, 0))
         ttk.Button(buttons, text="Refresh", command=self._refresh_model_list).pack(side=LEFT, padx=(8, 0))
 
     def _build_gpu_panel(self, parent: ttk.Frame) -> None:
@@ -594,6 +601,7 @@ class SubtitleCreatorGui:
         directory = filedialog.askdirectory(title="Select model cache directory", initialdir=self.model_cache_var.get())
         if directory:
             self.model_cache_var.set(directory)
+            self._refresh_model_choices()
             self._refresh_model_list()
 
     def _on_device_changed(self, _event: object | None = None) -> None:
@@ -682,7 +690,7 @@ class SubtitleCreatorGui:
                 result = backend.transcribe(
                     item.input_path,
                     TranscriptionOptions(
-                        model=item.model,
+                        model=resolve_model_reference(item.model, cache_dir),
                         language=self.language_var.get().strip() or None,
                         task=TaskName(self.task_var.get()),
                         device=self.device_var.get(),
@@ -786,11 +794,12 @@ class SubtitleCreatorGui:
         selected = self._selected_download_model()
         self.model_list.delete(0, END)
         cache_dir = Path(self.model_cache_var.get())
-        for model_name in self.model_names:
+        self._refresh_model_choices()
+        for model_name in self.download_model_names:
             status = "cached" if is_model_downloaded(model_name, cache_dir) else "not downloaded"
             self.model_list.insert(END, f"{model_name} [{status}]")
-        if selected and selected in self.model_names:
-            index = self.model_names.index(selected)
+        if selected and selected in self.download_model_names:
+            index = self.download_model_names.index(selected)
             self.model_list.selection_set(index)
             self.model_list.see(index)
         self._on_model_list_selected()
@@ -799,7 +808,7 @@ class SubtitleCreatorGui:
         selection = self.model_list.curselection() if hasattr(self, "model_list") else ()
         if not selection:
             return None
-        return self.model_names[selection[0]]
+        return self.download_model_names[selection[0]]
 
     def _on_model_list_selected(self, _event: object | None = None) -> None:
         model_name = self._selected_download_model()
@@ -819,6 +828,34 @@ class SubtitleCreatorGui:
         self.download_status_var.set(f"Downloading {model_name}...")
         thread = threading.Thread(target=self._download_model_worker, args=(model_name,), daemon=True)
         thread.start()
+
+    def _import_model(self) -> None:
+        filename = filedialog.askopenfilename(
+            title="Select model file to import",
+            filetypes=(
+                ("Model files", "*.bin *.json *.model *.onnx *.gguf *.ct2"),
+                ("All files", "*.*"),
+            ),
+        )
+        if not filename:
+            return
+        try:
+            imported_path = import_model_to_cache(Path(filename), Path(self.model_cache_var.get()))
+            self._refresh_model_choices()
+            self.download_status_var.set(f"Imported local:{imported_path.name} to {imported_path}")
+        except Exception as exc:
+            messagebox.showerror("Import model", f"Could not import model: {exc}")
+
+    def _refresh_model_choices(self) -> None:
+        cache_dir = Path(self.model_cache_var.get())
+        current_values = [*self.download_model_names, *imported_model_names(cache_dir)]
+        self.model_names = current_values
+        self.default_model_combo.configure(values=current_values)
+        self.selected_model_combo.configure(values=current_values)
+        if self.default_model_var.get() not in current_values and current_values:
+            self.default_model_var.set(current_values[0])
+        if self.selected_model_var.get() not in current_values and current_values:
+            self.selected_model_var.set(self.default_model_var.get())
 
     def _download_model_worker(self, model_name: str) -> None:
         try:

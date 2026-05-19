@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import shutil
 from pathlib import Path
 
 MODEL_DESCRIPTIONS = {
@@ -42,6 +43,8 @@ DEFAULT_MODELS = [
     "distil-large-v3",
     "distil-large-v3.5",
 ]
+IMPORTED_MODELS_DIR = "imported"
+MODEL_FOLDER_MARKERS = {"config.json", "model.bin", "tokenizer.json", "vocabulary.json"}
 
 
 def default_model_cache() -> Path:
@@ -66,7 +69,34 @@ def available_model_names() -> list[str]:
 
 def describe_model(model_name: str) -> str:
     """Return short display text for a model."""
+    if model_name.startswith("local:"):
+        return "Imported local model in the configured model cache."
     return MODEL_DESCRIPTIONS.get(model_name, "CTranslate2 faster-whisper model.")
+
+
+def imported_model_names(cache_dir: Path) -> list[str]:
+    """Return imported local model labels from the configured cache."""
+
+    imported_root = cache_dir / IMPORTED_MODELS_DIR
+    if not imported_root.exists():
+        return []
+    return [f"local:{path.name}" for path in sorted(imported_root.iterdir()) if path.is_dir()]
+
+
+def resolve_model_reference(model_name: str, cache_dir: Path | None) -> str:
+    """Resolve a model selector value to a backend model name or path."""
+
+    if not model_name.startswith("local:"):
+        return model_name
+    if cache_dir is None:
+        raise ValueError("Imported local models require a model cache directory.")
+    local_name = model_name.removeprefix("local:").strip()
+    if not local_name or Path(local_name).name != local_name:
+        raise ValueError(f"Invalid imported model name: {model_name}")
+    model_path = cache_dir / IMPORTED_MODELS_DIR / local_name
+    if not model_path.exists():
+        raise FileNotFoundError(f"Imported model not found: {model_path}")
+    return str(model_path)
 
 
 def is_model_downloaded(model_name: str, cache_dir: Path) -> bool:
@@ -90,6 +120,47 @@ def download_model_to_cache(model_name: str, cache_dir: Path) -> Path:
 
     cache_dir.mkdir(parents=True, exist_ok=True)
     return Path(download_model(model_name, cache_dir=str(cache_dir)))
+
+
+def import_model_to_cache(source_file: Path, cache_dir: Path) -> Path:
+    """Copy a selected local model file or model folder into the app cache."""
+
+    if not source_file.exists():
+        raise FileNotFoundError(f"Model file not found: {source_file}")
+    source_root = _model_root_from_selection(source_file)
+    imported_root = cache_dir / IMPORTED_MODELS_DIR
+    imported_root.mkdir(parents=True, exist_ok=True)
+
+    if source_root.resolve().is_relative_to(imported_root.resolve()):
+        return source_root
+
+    destination = _unique_destination(imported_root, source_root.stem if source_root.is_file() else source_root.name)
+    if source_root.is_dir():
+        shutil.copytree(source_root, destination)
+    else:
+        destination.mkdir(parents=True)
+        shutil.copy2(source_root, destination / source_root.name)
+    return destination
+
+
+def _model_root_from_selection(source_file: Path) -> Path:
+    if source_file.is_dir():
+        return source_file
+    parent_names = {path.name for path in source_file.parent.iterdir() if path.is_file()}
+    if source_file.name in MODEL_FOLDER_MARKERS or MODEL_FOLDER_MARKERS.intersection(parent_names):
+        return source_file.parent
+    return source_file
+
+
+def _unique_destination(parent: Path, name: str) -> Path:
+    safe_name = "".join(char if char.isalnum() or char in "._-" else "_" for char in name).strip("._")
+    safe_name = safe_name or "imported-model"
+    destination = parent / safe_name
+    counter = 2
+    while destination.exists():
+        destination = parent / f"{safe_name}-{counter}"
+        counter += 1
+    return destination
 
 
 def cuda_device_count() -> int:
