@@ -1001,9 +1001,14 @@ class SubtitleCreatorGui:
             if item_id != self.active_item_id:
                 return
             if total and total > 0:
-                self.current_fraction = max(0.0, min(1.0, float(completed or 0.0) / float(total)))
+                progress_fraction = max(0.0, min(1.0, float(completed or 0.0) / float(total)))
+                self.current_fraction = max(self.current_fraction, progress_fraction)
                 self.current_progress["value"] = self.current_fraction * 100
+                item = self.items.get(item_id)
+                if item:
+                    self.current_label_var.set(f"Current file: {item.input_path.name} ({self.current_fraction:.0%})")
                 self._update_queue_progress()
+                self.root.update_idletasks()
         elif event_name == "item_done":
             item_id, cue_count, language = payload  # type: ignore[misc]
             item = self.items[item_id]
